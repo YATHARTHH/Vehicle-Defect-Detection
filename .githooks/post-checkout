@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DevHub Security Gate — Post-Checkout Hook
+# Ensures .githooks stays active after every branch checkout / git switch.
+#
+# Git passes 3 args: <prev-HEAD> <new-HEAD> <checkout-flag>
+#   checkout-flag = 1  → branch checkout or clone
+#   checkout-flag = 0  → file-level checkout (skip)
+# =============================================================================
+
+BRANCH_CHECKOUT="${3:-1}"
+
+# Skip for file-level checkouts (e.g. git checkout -- file.txt)
+[ "$BRANCH_CHECKOUT" = "0" ] && exit 0
+
+# Re-apply core.hooksPath if it was lost (e.g. someone ran git clone fresh,
+# or reset config). Only acts if .githooks directory exists in this repo.
+if [ -d ".githooks" ]; then
+  CURRENT=$(git config core.hooksPath 2>/dev/null || echo "")
+  if [ "$CURRENT" != ".githooks" ]; then
+    git config core.hooksPath .githooks 2>/dev/null || true
+    chmod +x .githooks/* 2>/dev/null || true
+    echo "🔒 DevHub: Security hooks re-activated (core.hooksPath → .githooks)"
+  fi
+fi

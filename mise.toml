@@ -1,0 +1,20 @@
+[tools]
+python = "3.12"
+gitleaks = "latest"
+terraform = "latest"
+java = "temurin-21"
+
+[tasks.setup]
+description = "Install tools and activate security hooks"
+run = [
+  "mise install",
+  "python -m pip install pre-commit --quiet --disable-pip-version-check --no-warn-script-location",
+  "git config core.hooksPath .githooks"
+]
+
+[tasks.scan]
+description = "Manually run the secret scan on staged files"
+run = "python tasks/scan.py"
+
+[settings]
+experimental = true

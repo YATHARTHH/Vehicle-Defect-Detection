@@ -1,0 +1,13 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: "overbody-detection"
+  description: "Overbody-Damage-Detection"
+  annotations:
+    github.com/project-slug: Ascentt-Systems/overbody-detection
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: documentation
+  lifecycle: experimental
+  owner: "group:default/ascentt_systems_inc"
+  subcomponentOf: "Overbody-Damage-Detection"

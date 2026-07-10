@@ -1,0 +1,45 @@
+# Load gitleaks' built-in ruleset. Without this, supplying --config replaces
+# the default rules entirely, leaving zero detection rules loaded.
+[extend]
+useDefault = true
+
+# Custom rule: catches all AWS key prefixes (AKIA, ASIA, AROA, AIDA, AGPA, AIPA, ANPA, ANVA, A3T).
+# The built-in aws-access-token rule applies entropy filtering that can miss ASIA (STS) keys.
+# This rule has no entropy threshold so every syntactically valid key is blocked.
+[[rules]]
+id = "aws-access-key-all-prefixes"
+description = "AWS Access Key ID — all IAM/STS prefixes"
+regex = '''(?:A3T[A-Z0-9]|AKIA|ASIA|AROA|AIDA|AGPA|AIPA|ANPA|ANVA)[A-Z0-9]{16}'''
+tags = ["aws", "credentials"]
+
+# Explicit GitHub token rules — covers classic PAT, fine-grained PAT, OAuth, app, and refresh tokens.
+# Defined explicitly so detection does not depend on entropy filtering from the built-in rule.
+[[rules]]
+id = "github-token-all-types"
+description = "GitHub token — all token types (ghp, gho, ghu, ghs, ghr, github_pat)"
+regex = '''(?:ghp|gho|ghu|ghs|ghr)_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{82}'''
+tags = ["github", "credentials"]
+
+# Azure AD client secret — random string assigned by Azure, 20–40 chars, assigned to
+# variable names containing client_secret, app_secret, or azure_secret.
+[[rules]]
+id = "azure-client-secret"
+description = "Azure AD Application Client Secret"
+regex = '''(?i)(?:client.?secret|app.?secret|azure.?secret)\s*[:=]\s*['"]?([a-zA-Z0-9~._\-]{20,40})['"]?'''
+tags = ["azure", "credentials"]
+
+# Password values assigned to common password variable names.
+# Catches DB_PASSWORD, db_pass, passwd, etc.
+[[rules]]
+id = "password-in-variable"
+description = "Password value in variable"
+regex = '''(?i)(?:^|\s)(?:db_?pass(?:word)?|passwd|app_?pass(?:word)?)\s*[:=]\s*['"]?([^\s'"]{8,})['"]?'''
+tags = ["password", "credentials"]
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+  ".security.baseline",  # detect-secrets baseline stores hashed values, not real secrets
+  "poetry.lock",
+  "package-lock.json",
+]

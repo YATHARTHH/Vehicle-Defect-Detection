@@ -1,0 +1,8 @@
+site_name: "Overbody-Damage-Detection"
+site_description: "Overbody-Damage-Detection"
+
+nav:
+  - Introduction: index.md
+
+plugins:
+  - techdocs-core
