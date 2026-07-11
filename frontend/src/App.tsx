@@ -27,6 +27,7 @@ interface AnalysisResult {
 	calibration: { cm_per_pixel: number; reference_found: boolean };
 	damages: Damage[];
 	annotated_image: string;
+	restored_image: string;
 	repair_guide: string;
 }
 
@@ -644,7 +645,7 @@ export default function App() {
 													onLoad={onImgLoad}
 													src={
 														tab === "restored"
-															? preview!
+															? result.restored_image
 															: result.annotated_image
 													}
 													alt="Vehicle"

@@ -93,7 +93,10 @@ def test_exif_metadata_stripping():
     # that the endpoint executes successfully returning 200 or 200 with fallback guide.
     response = client.post("/api/v1/analyze", files=file_data, headers=headers)
     assert response.status_code == 200
-    assert response.json()["success"] is True
+    res_data = response.json()
+    assert res_data["success"] is True
+    assert "restored_image" in res_data
+    assert res_data["restored_image"].startswith("data:image/jpeg;base64,")
 
 def test_deprecated_endpoint_compatibility():
     """Verify that the deprecated legacy endpoints still function correctly (v0 compatibility)."""
