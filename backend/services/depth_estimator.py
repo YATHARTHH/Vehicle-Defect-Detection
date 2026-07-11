@@ -157,3 +157,4 @@ def _formula_depth(bw: int, bh: int, cm_per_pixel: float) -> float:
     """Bounding-box diagonal formula fallback."""
     diagonal_px = np.sqrt(bw**2 + bh**2)
     return diagonal_px * cm_per_pixel * 0.05
+

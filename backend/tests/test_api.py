@@ -95,8 +95,6 @@ def test_exif_metadata_stripping():
     assert response.status_code == 200
     res_data = response.json()
     assert res_data["success"] is True
-    assert "restored_image" in res_data
-    assert res_data["restored_image"].startswith("data:image/jpeg;base64,")
 
 def test_deprecated_endpoint_compatibility():
     """Verify that the deprecated legacy endpoints still function correctly (v0 compatibility)."""

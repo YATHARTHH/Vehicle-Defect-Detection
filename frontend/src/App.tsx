@@ -147,12 +147,14 @@ export default function App() {
 	const [stage, setStage] = useState("");
 	const [result, setResult] = useState<AnalysisResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [tab, setTab] = useState<"annotated" | "split" | "restored">(
+	const [tab, setTab] = useState<"annotated" | "split">(
 		"annotated",
 	);
 	const [splitPos, setSplitPos] = useState(50);
 	const [hoverId, setHoverId] = useState<number | null>(null);
 	const [imgDim, setImgDim] = useState({ w: 0, h: 0, nw: 1, nh: 1 });
+	const [rulerStart, setRulerStart] = useState<{ x: number; y: number } | null>(null);
+	const [rulerEnd, setRulerEnd] = useState<{ x: number; y: number } | null>(null);
 	const imgRef = useRef<HTMLImageElement>(null);
 
 	// Handle file selection
@@ -221,6 +223,35 @@ export default function App() {
 		setError(null);
 		setTab("annotated");
 		setSplitPos(50);
+		setRulerStart(null);
+		setRulerEnd(null);
+	};
+
+	const handleViewerClick = (e: React.MouseEvent<HTMLImageElement>) => {
+		if (!result || !imgRef.current) return;
+		const rect = imgRef.current.getBoundingClientRect();
+		const clickX = e.clientX - rect.left;
+		const clickY = e.clientY - rect.top;
+		
+		const naturalX = (clickX / rect.width) * imgDim.nw;
+		const naturalY = (clickY / rect.height) * imgDim.nh;
+		
+		if (!rulerStart || (rulerStart && rulerEnd)) {
+			setRulerStart({ x: naturalX, y: naturalY });
+			setRulerEnd(null);
+		} else {
+			setRulerEnd({ x: naturalX, y: naturalY });
+		}
+	};
+
+	const calculateRulerDist = () => {
+		if (!rulerStart || !rulerEnd || !result) return "";
+		const dx = rulerEnd.x - rulerStart.x;
+		const dy = rulerEnd.y - rulerStart.y;
+		const pxDist = Math.sqrt(dx * dx + dy * dy);
+		const cmPerPx = result.calibration.cm_per_pixel || 0.04;
+		const cmDist = pxDist * cmPerPx;
+		return `${cmDist.toFixed(1)} cm`;
 	};
 
 	// Export report
@@ -579,12 +610,6 @@ export default function App() {
 										>
 											Compare
 										</button>
-										<button
-											className={`tab-btn green ${tab === "restored" ? "active" : ""}`}
-											onClick={() => setTab("restored")}
-										>
-											Restored
-										</button>
 									</div>
 								</div>
 
@@ -643,20 +668,15 @@ export default function App() {
 												<img
 													ref={imgRef}
 													onLoad={onImgLoad}
-													src={
-														tab === "restored"
-															? result.restored_image
-															: result.annotated_image
-													}
+													onClick={handleViewerClick}
+													src={result.annotated_image}
 													alt="Vehicle"
 													style={{
 														maxWidth: "100%",
 														maxHeight: 360,
 														display: "block",
-														filter:
-															tab === "restored"
-																? "brightness(1.04) contrast(0.95) saturate(1.1)"
-																: "none",
+														filter: "none",
+														cursor: "crosshair",
 													}}
 												/>
 
@@ -693,11 +713,98 @@ export default function App() {
 														);
 													})}
 
-												{/* Restored badge */}
-												{tab === "restored" && (
-													<div className="restoration-badge">
-														✨ Restoration Simulation
-													</div>
+												{/* Neon Ruler SVG Layer */}
+												{rulerStart && (
+													<svg
+														style={{
+															position: "absolute",
+															top: 0,
+															left: 0,
+															width: "100%",
+															height: "100%",
+															pointerEvents: "none",
+															zIndex: 8,
+														}}
+													>
+														<circle
+															cx={rulerStart.x * scaleX}
+															cy={rulerStart.y * scaleY}
+															r="4"
+															fill="#00ffcc"
+															stroke="#ffffff"
+															strokeWidth="1"
+														/>
+														{rulerEnd && (
+															<>
+																<line
+																	x1={rulerStart.x * scaleX}
+																	y1={rulerStart.y * scaleY}
+																	x2={rulerEnd.x * scaleX}
+																	y2={rulerEnd.y * scaleY}
+																	stroke="#00ffcc"
+																	strokeWidth="2.5"
+																	strokeDasharray="4 3"
+																/>
+																<circle
+																	cx={rulerEnd.x * scaleX}
+																	cy={rulerEnd.y * scaleY}
+																	r="4"
+																	fill="#00ffcc"
+																	stroke="#ffffff"
+																	strokeWidth="1"
+																/>
+																<g
+																	transform={`translate(${(rulerStart.x + rulerEnd.x) / 2 * scaleX}, ${(rulerStart.y + rulerEnd.y) / 2 * scaleY - 12})`}
+																>
+																	<rect
+																		x="-38"
+																		y="-11"
+																		width="76"
+																		height="18"
+																		rx="4"
+																		fill="rgba(15, 23, 42, 0.9)"
+																		stroke="#00ffcc"
+																		strokeWidth="1"
+																	/>
+																	<text
+																		textAnchor="middle"
+																		fill="#00ffcc"
+																		fontSize="10"
+																		fontWeight="bold"
+																		dy="2"
+																	>
+																		{calculateRulerDist()}
+																	</text>
+																</g>
+															</>
+														)}
+													</svg>
+												)}
+
+												{/* Clear Ruler Button */}
+												{rulerStart && (
+													<button
+														className="btn btn-ghost btn-xs"
+														onClick={(e) => {
+															e.stopPropagation();
+															setRulerStart(null);
+															setRulerEnd(null);
+														}}
+														style={{
+															position: "absolute",
+															top: 10,
+															right: 10,
+															zIndex: 10,
+															background: "rgba(15, 23, 42, 0.8)",
+															border: "1px solid rgba(255,255,255,0.1)",
+															borderRadius: 4,
+															color: "#ef4444",
+															padding: "2px 6px",
+															fontSize: "10px",
+														}}
+													>
+														Clear Ruler
+													</button>
 												)}
 											</div>
 										</div>
@@ -707,9 +814,7 @@ export default function App() {
 										<span>
 											{tab === "split"
 												? "↔ Drag slider to compare original vs. annotated"
-												: tab === "restored"
-													? "✨ Damage overlays hidden — restoration preview active"
-													: "🔍 Hover damage boxes to inspect metrics"}
+												: "📏 Click two points on the image to measure custom distances"}
 										</span>
 										<button className="btn btn-ghost btn-sm" onClick={reset}>
 											New image

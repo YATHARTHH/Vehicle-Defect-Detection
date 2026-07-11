@@ -44,7 +44,6 @@ load_dotenv()
 from services.detector import DamageDetector
 from services.guidance import RepairGuidanceService
 from services.severity import SeverityEstimator
-from services.restorer import DamageRestorer
 from utils.cv_utils import detect_calibration_factor, get_annotated_image_base64
 
 app = FastAPI(
@@ -82,7 +81,6 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 detector = DamageDetector()
 severity_estimator = SeverityEstimator()
 guidance_service = RepairGuidanceService()
-restorer = DamageRestorer()
 
 # 5. Secure API Key Management
 API_KEY_NAME = "X-API-Key"
@@ -301,11 +299,6 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
             get_annotated_image_base64, temp_file_path, damages, ref_box
         )
 
-        # 6b. Generate clean, inpainted paint restoration base64 string
-        restored_image_b64 = await to_thread.run_sync(
-            restorer.restore, temp_file_path, damages
-        )
-
         # 7. Call Gemini for repair guidance report (incorporates network circuit breaker)
         repair_guide = await to_thread.run_sync(
             guidance_service.generate_guide, damages
@@ -331,7 +324,6 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
             "calibration": {"cm_per_pixel": cm_per_pixel, "reference_found": ref_box is not None},
             "damages": damages,
             "annotated_image": f"data:image/jpeg;base64,{annotated_image_b64}",
-            "restored_image": f"data:image/jpeg;base64,{restored_image_b64}",
             "repair_guide": repair_guide,
         }
 
