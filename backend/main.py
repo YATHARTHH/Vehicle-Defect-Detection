@@ -1,34 +1,34 @@
 import os
 import shutil
-import uuid
 import time
+import uuid
 from collections import defaultdict
-from typing import Dict, List
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Security, Request
-from fastapi.security import APIKeyHeader
+
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from dotenv import load_dotenv
+from fastapi.security import APIKeyHeader
 from PIL import Image
 
 # Load environment variables
 load_dotenv()
 
 from services.detector import DamageDetector
-from utils.cv_utils import detect_calibration_factor, get_annotated_image_base64
-from services.severity import SeverityEstimator
 from services.guidance import RepairGuidanceService
+from services.severity import SeverityEstimator
+from utils.cv_utils import detect_calibration_factor, get_annotated_image_base64
 
 app = FastAPI(
     title="Overbody Damage Detection API",
     description="Secure API for detecting vehicle surface damage, estimating severity, and generating AI repair guidance.",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In development, allow all origins
+    allow_origins=["*"],  # In development, allow all origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,27 +49,26 @@ guidance_service = RepairGuidanceService()
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
+
 def get_api_key(header_key: str = Security(api_key_header)):
     """
     Dependency to validate X-API-Key header.
     """
-    configured_key = os.getenv("API_KEY", "overbody_secure_key_2026")
+    configured_key = os.getenv("API_KEY", "overbody_secure_key_2026")  # pragma: allowlist secret
     if not header_key:
         raise HTTPException(
-            status_code=401,
-            detail="API Key missing. Please provide the X-API-Key header."
+            status_code=401, detail="API Key missing. Please provide the X-API-Key header."
         )
     if header_key != configured_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API Key. Unauthorized access."
-        )
+        raise HTTPException(status_code=401, detail="Invalid API Key. Unauthorized access.")
     return header_key
 
+
 # Simple in-memory sliding window rate limiter
-RATE_LIMIT_WINDOW = 60 # seconds
-RATE_LIMIT_MAX_REQUESTS = 10 # limit requests per IP
-request_history: Dict[str, List[float]] = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX_REQUESTS = 10  # limit requests per IP
+request_history: dict[str, list[float]] = defaultdict(list)
+
 
 @app.middleware("http")
 async def rate_limiter_middleware(request: Request, call_next):
@@ -80,25 +79,25 @@ async def rate_limiter_middleware(request: Request, call_next):
     path = request.url.path
     if path in ["/api/health", "/docs", "/openapi.json"]:
         return await call_next(request)
-        
+
     client_ip = request.client.host if request.client else "unknown"
     current_time = time.time()
-    
+
     # Filter timestamps to keep only those within the sliding window
     request_history[client_ip] = [
-        t for t in request_history[client_ip]
-        if current_time - t < RATE_LIMIT_WINDOW
+        t for t in request_history[client_ip] if current_time - t < RATE_LIMIT_WINDOW
     ]
-    
+
     if len(request_history[client_ip]) >= RATE_LIMIT_MAX_REQUESTS:
         raise HTTPException(
             status_code=429,
-            detail=f"Too many requests. Limit is {RATE_LIMIT_MAX_REQUESTS} requests per minute."
+            detail=f"Too many requests. Limit is {RATE_LIMIT_MAX_REQUESTS} requests per minute.",
         )
-        
+
     request_history[client_ip].append(current_time)
     response = await call_next(request)
     return response
+
 
 # ---------------------------------------------------------
 # API Endpoints
@@ -108,54 +107,93 @@ def health_check():
     return {
         "status": "healthy",
         "gemini_api_configured": os.getenv("GEMINI_API_KEY") is not None,
-        "rate_limit_max": RATE_LIMIT_MAX_REQUESTS
+        "rate_limit_max": RATE_LIMIT_MAX_REQUESTS,
     }
 
+
 @app.post("/api/analyze")
-async def analyze_image(
-    file: UploadFile = File(...),
-    _api_key: str = Depends(get_api_key)
-):
+async def analyze_image(file: UploadFile = File(...), _api_key: str = Depends(get_api_key)):
     # Validate file format by extension first
     if not file.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-        raise HTTPException(status_code=400, detail="Unsupported file format. Please upload PNG, JPG, or WEBP.")
+        raise HTTPException(
+            status_code=400, detail="Unsupported file format. Please upload PNG, JPG, or WEBP."
+        )
 
     # Save file to a temporary unique location
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     temp_file_path = os.path.join(TEMP_DIR, unique_filename)
-    
+
     try:
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
+
         # Security check: verify image integrity using Pillow to prevent exploit uploads
         try:
             with Image.open(temp_file_path) as img:
                 img.verify()
         except Exception:
-            raise HTTPException(status_code=400, detail="Corrupted or invalid image file structure.")
+            raise HTTPException(
+                status_code=400, detail="Corrupted or invalid image file structure."
+            )
 
         # Reopen image as verify() closes the file handles
         # 1. Detect pixel-to-cm calibration factor
         cm_per_pixel, ref_box = detect_calibration_factor(temp_file_path)
-        
+
         # 2. Run damage detector to locate boxes and contours
         raw_detections = detector.detect(temp_file_path)
-        
+
         # 3. Estimate physical measurements and severity classes
-        damages = severity_estimator.estimate(raw_detections, cm_per_pixel)
-        
+        damages = severity_estimator.estimate(raw_detections, cm_per_pixel, temp_file_path)
+
+        # 3b. Multimodal Panel Classification: Use Gemini to identify the primary car body panel shown
+        try:
+            if os.getenv("GEMINI_API_KEY"):
+                from google import genai
+
+                client = genai.Client()
+                with Image.open(temp_file_path) as img_pil:
+                    prompt = (
+                        "Identify the primary car body panel shown in this image. "
+                        "Answer with exactly one of: 'Front Bumper / Fender', 'Hood / Roof', 'Door Panel', 'Rear Bumper / Trunk', 'Lower Rocker Panel'."
+                    )
+                    response = client.models.generate_content(
+                        model="gemini-2.5-flash", contents=[img_pil, prompt]
+                    )
+                    primary_panel = response.text.strip()
+                    # Strip any potential markdown formatting from Gemini response
+                    primary_panel = (
+                        primary_panel.replace("`", "").replace("'", "").replace('"', "").strip()
+                    )
+
+                    # If valid panel was returned, overwrite the panel name for all damages
+                    valid_panels = [
+                        "Front Bumper / Fender",
+                        "Hood / Roof",
+                        "Door Panel",
+                        "Rear Bumper / Trunk",
+                        "Lower Rocker Panel",
+                    ]
+                    if any(vp.lower() in primary_panel.lower() for vp in valid_panels):
+                        matched_panel = next(
+                            vp for vp in valid_panels if vp.lower() in primary_panel.lower()
+                        )
+                        for d in damages:
+                            d["panel"] = matched_panel
+        except Exception as ge:
+            print(f"Failed to classify panel via Gemini: {ge}")
+
         # 4. Generate annotated image base64 string
         annotated_image_b64 = get_annotated_image_base64(temp_file_path, damages, ref_box)
-        
+
         # 5. Call Gemini to get repair guidance report
         repair_guide = guidance_service.generate_guide(damages)
-        
+
         # Calculate summary statistics
         severity_counts = {"Mild": 0, "Moderate": 0, "Severe": 0}
         for d in damages:
             severity_counts[d["severity"]] += 1
-            
+
         overall_severity = "Good"
         if severity_counts["Severe"] > 0:
             overall_severity = "Severe"
@@ -168,21 +206,18 @@ async def analyze_image(
             "success": True,
             "overall_severity": overall_severity,
             "summary": severity_counts,
-            "calibration": {
-                "cm_per_pixel": cm_per_pixel,
-                "reference_found": ref_box is not None
-            },
+            "calibration": {"cm_per_pixel": cm_per_pixel, "reference_found": ref_box is not None},
             "damages": damages,
             "annotated_image": f"data:image/jpeg;base64,{annotated_image_b64}",
-            "repair_guide": repair_guide
+            "repair_guide": repair_guide,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error executing analysis pipeline: {e}")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-        
+
     finally:
         # Clean up temporary uploaded file
         if os.path.exists(temp_file_path):
@@ -190,6 +225,7 @@ async def analyze_image(
                 os.remove(temp_file_path)
             except Exception as ex:
                 print(f"Error removing temp file {temp_file_path}: {ex}")
+
 
 @app.post("/api/export-report", response_class=HTMLResponse)
 async def export_report(report_data: dict, _api_key: str = Depends(get_api_key)):
@@ -200,10 +236,10 @@ async def export_report(report_data: dict, _api_key: str = Depends(get_api_key))
     overall = report_data.get("overall_severity", "Unknown")
     summary = report_data.get("summary", {"Mild": 0, "Moderate": 0, "Severe": 0})
     repair_guide = report_data.get("repair_guide", "")
-    
+
     # Convert guide markdown simple lists and headers to HTML for formatting
     guide_html = repair_guide.replace("\n", "<br/>")
-    
+
     damages_rows = ""
     for d in damages:
         cls = d["class"].replace("_", " ").title()
@@ -215,9 +251,13 @@ async def export_report(report_data: dict, _api_key: str = Depends(get_api_key))
             size_desc += f", Length: {metrics['length_cm']} cm"
         if "depth_cm" in metrics:
             size_desc += f", Depth: {metrics['depth_cm']} cm"
-            
-        badge_class = "badge-severe" if sev == "Severe" else ("badge-moderate" if sev == "Moderate" else "badge-mild")
-        
+
+        badge_class = (
+            "badge-severe"
+            if sev == "Severe"
+            else ("badge-moderate" if sev == "Moderate" else "badge-mild")
+        )
+
         damages_rows += f"""
         <tr>
             <td><strong>{cls}</strong></td>
@@ -307,6 +347,8 @@ async def export_report(report_data: dict, _api_key: str = Depends(get_api_key))
     """
     return html_content
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

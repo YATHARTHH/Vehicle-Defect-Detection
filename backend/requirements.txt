@@ -1,8 +1,11 @@
 fastapi
-uvicorn
-python-multipart
+google-genai
+huggingface_hub
 numpy
 opencv-python-headless
 pillow
-google-genai
 python-dotenv
+python-multipart
+timm
+ultralytics
+uvicorn
