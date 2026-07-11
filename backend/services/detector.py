@@ -15,6 +15,10 @@ from typing import Any
 import cv2
 import numpy as np
 
+import logging
+
+logger = logging.getLogger("overbody_api.detector")
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 CONF_THRESHOLD = 0.35
@@ -44,16 +48,16 @@ def _try_load_yolo() -> bool:
         from huggingface_hub import hf_hub_download
         from ultralytics import YOLO
 
-        print("[detector] Checking Hugging Face model cache for cardd-yolov8s...")
+        logger.info("Checking Hugging Face model cache for cardd-yolov8s...")
         model_path = hf_hub_download(repo_id="abdullahg7/cardd-yolov8s", filename="v2.0/best.pt")
         model = YOLO(model_path)
         _yolo_model = model
         _yolo_available = True
-        print("[detector] YOLOv8 car-damage model loaded successfully from cache/HF.")
+        logger.info("YOLOv8 car-damage model loaded successfully from cache/HF.")
         return True
 
     except Exception as e:
-        print(f"[detector] YOLOv8 load failed — using OpenCV fallback. ({e})")
+        logger.error(f"YOLOv8 load failed — using OpenCV fallback. ({e})")
         _yolo_available = False
         return False
 

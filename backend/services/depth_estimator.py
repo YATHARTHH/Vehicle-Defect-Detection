@@ -17,6 +17,10 @@ _midas_transform = None
 _midas_available: bool | None = None  # None = not yet checked
 
 
+import logging
+
+logger = logging.getLogger("overbody_api.depth_estimator")
+
 def _try_load_midas() -> bool:
     """Attempt to load MiDaS small. Returns True on success."""
     global _midas_model, _midas_transform, _midas_available
@@ -40,7 +44,7 @@ def _try_load_midas() -> bool:
                 with open(trusted_file, "a") as f:
                     f.write("rwightman_gen-efficientnet-pytorch\n")
         except Exception as te:
-            print(f"[depth_estimator] Failed to update PyTorch Hub trusted list: {te}")
+            logger.warning(f"Failed to update PyTorch Hub trusted list: {te}")
 
         model = torch.hub.load(
             "intel-isl/MiDaS",
@@ -61,11 +65,11 @@ def _try_load_midas() -> bool:
         _midas_model = model
         _midas_transform = transform
         _midas_available = True
-        print("[depth_estimator] MiDaS loaded successfully.")
+        logger.info("MiDaS loaded successfully.")
         return True
 
     except Exception as e:
-        print(f"[depth_estimator] MiDaS not available — using formula fallback. ({e})")
+        logger.error(f"MiDaS not available — using formula fallback. ({e})")
         _midas_available = False
         return False
 

@@ -1,0 +1,41 @@
+# -------------------------------------------------------------
+# docker-compose.yml — Backend and Redis caching services.
+# -------------------------------------------------------------
+
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: overbody-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - API_KEY=overbody_secure_key_2026
+      - ALLOWED_ORIGINS=http://localhost:5173
+      - REDIS_URL=redis://redis:6379/0
+      # Ensure GEMINI_API_KEY is loaded from shell/host environment
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      # Mount cache volume to prevent redownloading weights on container restart
+      - model_cache:/app/cache
+      - temp_uploads:/app/temp_uploads
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: overbody-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  model_cache:
+  temp_uploads:
+  redis_data:

@@ -9,3 +9,7 @@ python-multipart
 timm
 ultralytics
 uvicorn
+redis
+psutil
+pytest
+httpx

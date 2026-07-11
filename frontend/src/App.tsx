@@ -187,7 +187,7 @@ export default function App() {
 		try {
 			const fd = new FormData();
 			fd.append("file", f);
-			const res = await fetch(`${API_BASE}/api/analyze`, {
+			const res = await fetch(`${API_BASE}/api/v1/analyze`, {
 				method: "POST",
 				headers: { "X-API-Key": API_KEY },
 				body: fd,
@@ -226,7 +226,7 @@ export default function App() {
 	const exportReport = async () => {
 		if (!result) return;
 		try {
-			const res = await fetch(`${API_BASE}/api/export-report`, {
+			const res = await fetch(`${API_BASE}/api/v1/export-report`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
 				body: JSON.stringify(result),
@@ -742,7 +742,12 @@ export default function App() {
 										className="btn btn-ghost btn-sm"
 										onClick={exportReport}
 									>
-										<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-label="Print icon">
+										<svg
+											fill="none"
+											stroke="currentColor"
+											viewBox="0 0 24 24"
+											aria-label="Print icon"
+										>
 											<path
 												strokeLinecap="round"
 												strokeLinejoin="round"
