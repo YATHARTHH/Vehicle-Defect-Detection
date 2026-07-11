@@ -38,6 +38,52 @@ This project reduces that 90-minute audit process down to **under 30 seconds**.
 
 ---
 
+## 🗺️ System Architecture Overview
+
+```mermaid
+graph TD
+    A["👤 User Browser\nReact + TypeScript"] -->|"POST /api/v1/analyze\nX-API-Key header"| B
+
+    subgraph backend ["⚙️ FastAPI Backend  (main.py)"]
+        B["🛡️ Middleware Stack\nRate Limit · CORS · Security Headers"] --> C
+        C["📂 File Security\nExtension check · 10MB cap · EXIF strip"] --> D
+        D["🔀 Thread Pool Dispatcher\nAnyIO to_thread.run_sync"]
+    end
+
+    D --> E["📐 Calibration\ncv_utils.py\nCredit card HSV detect\n→ cm_per_pixel"]
+    D --> F["🔍 Damage Detection\ndetector.py"]
+    D --> G["📏 Severity Estimation\nseverity.py"]
+    D --> H["🖼️ Annotated Image\ncv_utils.py\nOpenCV draw"]
+    D --> I["📝 Repair Guidance\nguidance.py"]
+
+    subgraph detection ["Detection Engine"]
+        F --> F1{"YOLOv8\navailable?"}
+        F1 -->|Yes| F2["abdullahg7/cardd-yolov8s\nHugging Face model"]
+        F1 -->|No| F3["OpenCV Fallback\nSobel · Canny · HSV"]
+    end
+
+    subgraph severity ["Severity Engine"]
+        G --> G1["Intel MiDaS\nDepth Estimation"]
+        G --> G2["Bounding Box\nMeasurements"]
+    end
+
+    subgraph guidance ["Guidance Engine"]
+        I --> I1{"Circuit\nBreaker?"}
+        I1 -->|CLOSED| I2["Gemini 2.5 Flash\nAPI Call"]
+        I1 -->|TRIPPED| I3["Rule-Based\nOffline Generator"]
+    end
+
+    E & F2 & F3 & G1 & G2 & H & I2 & I3 --> J["📦 JSON Response\ndamages · annotated_image\nrepair_guide · calibration"]
+    J --> A
+
+    style backend fill:#1e293b,stroke:#334155,color:#e2e8f0
+    style detection fill:#0f172a,stroke:#1e40af,color:#e2e8f0
+    style severity fill:#0f172a,stroke:#065f46,color:#e2e8f0
+    style guidance fill:#0f172a,stroke:#7c2d12,color:#e2e8f0
+```
+
+---
+
 ## 2. THE TECHNOLOGY STACK — AND WHY WE CHOSE EACH PIECE
 
 ### Backend: FastAPI (Python)
@@ -110,6 +156,36 @@ If no card is found, the system falls back to `0.04 cm/pixel` — the typical ra
 ### AI Report Generation: Gemini 2.5 Flash
 
 Gemini 2.5 Flash is **multimodal** — it processes both images (for panel classification: "which part of the car is this?") and text (for the repair guidance report generation). We use it for both purposes. The service includes a **circuit breaker** to protect against rate limits or API failures (see section 3.5 below).
+
+### Technology Dependency Map
+
+```mermaid
+graph LR
+    IMG["🖼️ Input Image"] --> CV["OpenCV"]
+    IMG --> PIL["Pillow / PIL"]
+    IMG --> YOLO["YOLOv8\nUltralytics"]
+    IMG --> MIDAS["Intel MiDaS\nDPT Model"]
+    IMG --> GV["Gemini 2.5 Flash\nVision"]
+
+    CV -->|"HSV masking\nSobel · Canny"| DET["Damage Detection"]
+    PIL -->|"EXIF strip\nFormat verify"| SEC["Security Layer"]
+    YOLO -->|"bbox + class\n+ confidence"| DET
+    MIDAS -->|"depth map crop\n→ depth_cm"| SEV["Severity Score"]
+    GV -->|"Panel name\nidentification"| PNL["Panel Label"]
+
+    DET --> SEV
+    SEV --> PNL
+    PNL --> RPT["📋 Final Report"]
+
+    HF["🤗 Hugging Face Hub\nModel Cache"] -.->|"download once"| YOLO
+    GEMINI_TXT["Gemini 2.5 Flash\nText"] -->|"Damage descriptions\n→ repair guide"| RPT
+
+    style YOLO fill:#7c3aed,stroke:#5b21b6,color:#fff
+    style MIDAS fill:#0369a1,stroke:#0c4a6e,color:#fff
+    style GV fill:#16a34a,stroke:#14532d,color:#fff
+    style GEMINI_TXT fill:#16a34a,stroke:#14532d,color:#fff
+    style HF fill:#f59e0b,stroke:#92400e,color:#000
+```
 
 ---
 
@@ -192,6 +268,45 @@ Redis stores the counter in a shared, external database. If you run 3 server ins
 ### 3.2 The Analysis Pipeline — `/api/v1/analyze`
 
 This is the most important endpoint. When a user uploads an image, here is exactly what happens, in order:
+
+```mermaid
+flowchart TD
+    A(["📤 User uploads image"]) --> B["Check extension\n.jpg .png .webp .jpeg?"]
+    B -->|Invalid| ERR1(["❌ 400 Bad Request"])
+    B -->|Valid| C["Stream file in\n256KB chunks"]
+    C --> D{"Total bytes\n> 10MB?"}
+    D -->|Yes| ERR2(["❌ 413 Too Large"])
+    D -->|No| E["PIL: verify image\nstructure"]
+    E -->|Corrupted| ERR3(["❌ 400 Bad Request"])
+    E -->|Valid| F["PIL: strip EXIF\nGPS · device ID"]
+    F --> G["Save to temp_uploads/\nuuid_filename.jpg"]
+
+    G --> H1["🧵 Thread 1\ndetect_calibration_factor()"]
+    G --> H2["🧵 Thread 2\ndetector.detect()"]
+
+    H1 --> I1["cm_per_pixel\n+ ref_box"]
+    H2 --> I2["raw_detections[]"]
+
+    I1 & I2 --> J["🧵 Thread 3\nseverity_estimator.estimate()"]
+    J --> K["damages[] with\nseverity + metrics"]
+
+    K --> L["🧵 Thread 4\nGemini Vision\npanel classification"]
+    L --> M["Updated panel\nnames on damages"]
+
+    M --> N["🧵 Thread 5\nget_annotated_image_base64()"]
+    N --> O["base64 JPEG\nstring"]
+
+    M --> P["🧵 Thread 6\nguidance_service.generate_guide()"]
+    P --> Q["Markdown\nrepair report"]
+
+    O & Q --> R["🗑️ Delete temp file\nin finally block"]
+    R --> S(["✅ JSON Response"])
+
+    style ERR1 fill:#dc2626,stroke:#991b1b,color:#fff
+    style ERR2 fill:#dc2626,stroke:#991b1b,color:#fff
+    style ERR3 fill:#dc2626,stroke:#991b1b,color:#fff
+    style S fill:#16a34a,stroke:#14532d,color:#fff
+```
 
 #### Step 1: File Security — Extension Check + Size Cap
 ```python
@@ -346,6 +461,32 @@ edges = cv2.Canny(cv2.GaussianBlur(gray, (3,3), 0), 40, 120)
 Canny is a multi-stage edge detector optimized for finding thin, sharp lines. Scratches expose the metal substrate and create very thin, high-contrast lines. Sobel would find them too thick; Canny finds them precisely.
 
 **Contour Classification using Geometry:**
+
+```mermaid
+flowchart TD
+    A(["Contour found by OpenCV"]) --> B{"rust_density\n> 0.08?"}
+    B -->|Yes| R(["🟤 RUST\nOrange-red HSV dominates"])
+    B -->|No| C{"circularity\n> 0.25?"}
+    C -->|Yes| D(["⬤ DENT\nRoughly circular shape"])
+    C -->|No| E{"aspect ratio\n> 4.5 or < 0.22?"}
+    E -->|Yes| F(["— SCRATCH\nVery elongated rectangle"])
+    E -->|No| G{"circularity\n< 0.12?"}
+    G -->|Yes| H(["⚡ CRACK\nHighly irregular, branching"])
+    G -->|No| I{"std_dev of\ngray > 35\nand area > 1500?"}
+    I -->|Yes| J(["💡 BROKEN LAMP\nHigh texture variance"])
+    I -->|No| K{"area\n> 4000?"}
+    K -->|Yes| D2(["⬤ DENT"])
+    K -->|No| F2(["— SCRATCH"])
+
+    style R fill:#92400e,stroke:#78350f,color:#fff
+    style D fill:#1d4ed8,stroke:#1e3a8a,color:#fff
+    style D2 fill:#1d4ed8,stroke:#1e3a8a,color:#fff
+    style F fill:#6d28d9,stroke:#4c1d95,color:#fff
+    style F2 fill:#6d28d9,stroke:#4c1d95,color:#fff
+    style H fill:#b45309,stroke:#92400e,color:#fff
+    style J fill:#d97706,stroke:#b45309,color:#fff
+```
+
 ```python
 area = cv2.contourArea(contour)
 perimeter = cv2.arcLength(contour, True)
@@ -363,6 +504,51 @@ elif circularity < 0.12:      cls = "crack"    # very irregular, branching
 ### 3.4 Severity Estimation — `backend/services/severity.py`
 
 Every raw detection gets enriched with physical measurements and a severity classification. The rules are based on industry-standard body shop guidelines.
+
+```mermaid
+xychart-beta
+    title "Severity Thresholds by Damage Type"
+    x-axis ["Scratch/Crack (cm)", "Dent Depth (cm)", "Rust Area (cm²)", "Glass/Lamp (cm²)"]
+    y-axis "Threshold Value" 0 --> 80
+    bar [8, 0.8, 12, 20]
+    bar [25, 2.0, 50, 75]
+```
+
+> 📊 **Reading the chart**: The first (darker) bar per group = **Mild→Moderate threshold**. The second (lighter) bar = **Moderate→Severe threshold**. Values above the second bar = Severe.
+
+```mermaid
+flowchart LR
+    subgraph scratch ["✏️ Scratch / Crack"]
+        S1["diagonal px × cm_per_pixel\n= length_cm"] --> S2{"length_cm"}
+        S2 -->|"< 8 cm"| SM(["🟢 Mild"])
+        S2 -->|"8–25 cm"| SMO(["🟡 Moderate"])
+        S2 -->|"> 25 cm"| SS(["🔴 Severe"])
+    end
+
+    subgraph dent ["⬤ Dent"]
+        D1["MiDaS depth map crop\n→ depth_cm"] --> D2{"depth_cm"}
+        D2 -->|"< 0.8 cm"| DM(["🟢 Mild"])
+        D2 -->|"0.8–2.0 cm"| DMO(["🟡 Moderate"])
+        D2 -->|"> 2.0 cm"| DS(["🔴 Severe"])
+    end
+
+    subgraph rust ["🟤 Rust"]
+        R1["pixel_area × cm_per_pixel²\n= spread_cm²"] --> R2{"spread_cm²"}
+        R2 -->|"< 12 cm²"| RM(["🟢 Mild"])
+        R2 -->|"12–50 cm²"| RMO(["🟡 Moderate"])
+        R2 -->|"> 50 cm²"| RS(["🔴 Severe"])
+    end
+
+    style SM fill:#16a34a,color:#fff,stroke:#14532d
+    style DM fill:#16a34a,color:#fff,stroke:#14532d
+    style RM fill:#16a34a,color:#fff,stroke:#14532d
+    style SMO fill:#ca8a04,color:#fff,stroke:#854d0e
+    style DMO fill:#ca8a04,color:#fff,stroke:#854d0e
+    style RMO fill:#ca8a04,color:#fff,stroke:#854d0e
+    style SS fill:#dc2626,color:#fff,stroke:#991b1b
+    style DS fill:#dc2626,color:#fff,stroke:#991b1b
+    style RS fill:#dc2626,color:#fff,stroke:#991b1b
+```
 
 ```python
 # Scratch / Crack — use diagonal as length proxy
@@ -394,6 +580,39 @@ severity = "Mild"     if cm2_area < 12.0 else \
 
 A circuit breaker is a **software design pattern** borrowed from electrical engineering. In electronics, a circuit breaker automatically cuts power when too much current flows, preventing damage. In software, it automatically stops calling a failing external service and switches to a safe fallback.
 
+```mermaid
+stateDiagram-v2
+    [*] --> CLOSED : Server starts
+
+    CLOSED --> CLOSED : Gemini API success\nconsecutive_failures = 0
+    CLOSED --> CLOSED : Gemini API failure\nconsecutive_failures < 3
+    CLOSED --> TRIPPED : consecutive_failures >= 3\ncircuit_tripped_until = now + 300s
+
+    TRIPPED --> TRIPPED : Any request arrives\nReturn offline fallback instantly\n(no network call at all)
+    TRIPPED --> HALF_OPEN : 300 seconds elapsed\nnext request allowed through
+
+    HALF_OPEN --> CLOSED : Gemini API success\nconsecutive_failures = 0
+    HALF_OPEN --> TRIPPED : Gemini API failure\nRe-trip for another 300s
+
+    note right of CLOSED
+        Normal operation.
+        All Gemini calls go through.
+        Failures tracked.
+    end note
+
+    note right of TRIPPED
+        Protection mode.
+        Zero network calls.
+        Rule-based fallback serves instantly.
+    end note
+
+    note right of HALF_OPEN
+        Test probe.
+        One call allowed to check
+        if Gemini recovered.
+    end note
+```
+
 ```python
 class RepairGuidanceService:
     def __init__(self):
@@ -423,7 +642,7 @@ class RepairGuidanceService:
 **States:**
 - `CLOSED` (normal): Gemini calls go through. Failures increment counter.
 - `TRIPPED` (protecting): All calls instantly return offline rules. No network.
-- `RESET` (auto-recovery): After 5 minutes, the next call tries Gemini again. Success = back to CLOSED. Failure = re-trip.
+- `HALF_OPEN` (auto-recovery): After 5 minutes, the next call probes Gemini. Success = back to CLOSED. Failure = re-trip.
 
 The fallback generator (`_generate_fallback_guide`) is a pure Python string builder that produces a complete professional repair report using industry-standard rules — no AI dependency.
 
