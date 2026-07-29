@@ -251,10 +251,10 @@ To convert pixel measurements to centimeters, the system locates a standard cred
    - Finds contours with `cv2.findContours()` and simplifies them to 4 corners using `cv2.approxPolyDP()`.
    - Extracts bounding box pixel width ($w_{\text{px}}$) and height ($h_{\text{px}}$).
 3. **Scale Factor Calculation:**
-   $$\text{pixels\_per\_cm} = \frac{\max(w_{\text{px}}, h_{\text{px}})}{8.56\text{ cm}}$$
-   $$\text{cm\_per\_pixel} = \frac{1.0}{\text{pixels\_per\_cm}}$$
+   $$\text{pixels per cm} = \frac{\max(w_{\text{px}}, h_{\text{px}})}{8.56\text{ cm}}$$
+   $$\text{cm per pixel} = \frac{1.0}{\text{pixels per cm}}$$
 4. **Measuring Flaws:** To find the physical length of a scratch with pixel length $L_{\text{px}}$:
-   $$\text{Length}_{\text{cm}} = L_{\text{px}} \times \text{cm\_per\_pixel}$$
+   $$\text{Length in cm} = L_{\text{px}} \times \text{cm per pixel}$$
 
 ---
 
@@ -294,7 +294,7 @@ Camera angles affect pixel sizes — objects captured at steep angles appear sma
    - *Mitigation:* Uses `max(width, height)` of the detected card contour to minimize scale errors caused by tilt.
 2. **Depth Scale Ambiguity:**
    - *Problem:* Monocular depth networks infer *relative* depth, not absolute distance metrics.
-   - *Mitigation:* We tie relative depth variation directly to real-world bounding box dimensions ($\text{max\_dim\_cm}$) scaled by an empirical deformation constant (`0.12`).
+   - *Mitigation:* We tie relative depth variation directly to real-world bounding box dimensions ($\text{max dim cm}$) scaled by an empirical deformation constant (`0.12`).
 
 ---
 
