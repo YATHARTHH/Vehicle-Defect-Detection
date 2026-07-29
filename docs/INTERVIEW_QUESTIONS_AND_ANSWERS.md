@@ -622,6 +622,102 @@ Instead of printing plain text logs, the server appends formatted JSON lines to 
 
 ---
 
+### Q30: How would you design a Real-Time High-Speed Drive-Through Gantry Inspection System (e.g. 60 FPS video streams at toll booths or car rental return lanes)?
+
+#### 📌 In Simple Words
+When vehicles drive through a gantry at 30 km/h, high-speed cameras capture 60 FPS video streams. Processing every single frame with heavy AI is too slow. Instead, the system uses motion-blur filtering and keyframe selection to pick the 4 sharpest photos per vehicle panel, sending only those keyframes to a high-throughput GPU inference cluster.
+
+#### 🛠️ High-Throughput Stream Architecture
+```
+[ 🎥 8 Gantry Cameras (60 FPS) ] ──► [ RTSP Video Ingest Stream ]
+                                           │
+                                           ▼
+                                [ Keyframe Selection Node ]
+                                (Blur Filter + Motion Trigger)
+                                           │
+                                           ▼
+                               [ Redis Stream Queue ]
+                                           │
+                                           ▼
+                               [ NVIDIA Triton GPU Server ]
+                               (TensorRT Dynamic Batching)
+```
+1. **Keyframe Extraction:** OpenCV Laplacian variance filter (`cv2.Laplacian(gray, cv2.CV_64F).var()`) drops blurry frames and selects the highest-sharpness image per panel.
+2. **GPU Acceleration:** Compiles YOLOv8 into **NVIDIA TensorRT FP16/INT8 engines** running on Triton Inference Server for sub-15ms frame processing.
+3. **Stream Aggregation:** Aggregates findings per vehicle license plate in a Redis Stream buffer before writing final audit records.
+
+---
+
+### Q31: How do you handle poor lighting, heavy rain, glare, or mud-covered vehicles in computer vision detection?
+
+#### 📌 In Simple Words
+Bad lighting, water drops, and mud patches can cause false positives or missed defects. The system uses adaptive image enhancement algorithms (CLAHE) for dark shadows, removes specular reflections using HSV thresholding, and falls back to Multimodal LLMs (Gemini) when image quality is low.
+
+#### 🛠️ Adverse Condition Mitigations
+1. **Low-Light Enhancement:** CLAHE (Contrast Limited Adaptive Histogram Equalization) boosts local contrast in underexposed shadow regions.
+2. **Glare & Specular Reflection Removal:** Isolates high-saturation specular highlights (`V > 240`, `S < 30` in HSV) to avoid misclassifying sunlight reflections as paint scratches.
+3. **Uncertainty Badge:** If OpenCV image sharpness is low ($< 50.0$), the API response attaches an `adverse_environmental_conditions` warning badge.
+
+---
+
+### Q32: How would you design an Edge-AI Offline Deployment model for mobile handheld devices used in subterranean parking garages?
+
+#### 📌 In Simple Words
+In underground parking garages with zero internet or cellular connectivity, cloud API calls fail. The system runs lightweight quantized ONNX models directly on local hardware (Android/iOS SDK or NVIDIA Jetson edge nodes) and queues inspection data in local device storage until internet connectivity is restored.
+
+#### 🛠️ Edge Architecture
+1. **Model Quantization (ONNX Runtime / TensorRT Edge):** Quantizes YOLOv8 from FP32 to **INT8 ONNX format**, reducing model binary size from 45MB to 8MB.
+2. **Local PWA Queue (IndexedDB):** Progressive Web App service worker queues offline inspection records in browser `IndexedDB`.
+3. **Background Sync:** Automatically uploads queued offline records to the main backend when network connection is re-established.
+
+---
+
+### Q33: How would you detect fraudulent double-claims (e.g. submitting the same dent photo taken from a different angle 6 months later)?
+
+#### 📌 In Simple Words
+Fraudsters often photograph an old dent from a slightly different angle to claim a new insurance payout. Simple hash matching fails because camera angles change pixel values. The system extracts visual feature embeddings (ResNet/CLIP feature vectors) and compares damage spatial landmarks against the historical database using Vector Similarity Search.
+
+#### 🛠️ Anti-Fraud Vector Pipeline
+```
+[ Uploaded Image ] ──► [ ResNet-50 / CLIP Encoder ] ──► [ 512-D Feature Vector ]
+                                                                │
+                                                                ▼
+                                                    [ FAISS Vector Index ]
+                                                    (Cosine Similarity Search)
+                                                                │
+                                                                ▼
+                                                    [ Fraud Risk Score % ]
+```
+1. **Perceptual Hashing (pHash):** Catches cropped or rotated duplicate images.
+2. **Deep Vector Embeddings:** Passes damage crops through a pre-trained feature extractor (ResNet/CLIP) to produce a 512-dimensional vector embedding.
+3. **FAISS Cosine Similarity Search:** Queries a local **FAISS (Facebook AI Similarity Search)** vector index of historical claims. If cosine similarity exceeds `0.88` on the same vehicle VIN, the claim is flagged for human fraud investigation.
+
+---
+
+### Q34: How would you architect Multi-Tenant Isolation for enterprise SaaS clients (Hertz vs. Avis vs. Progressive Insurance)?
+
+#### 📌 In Simple Words
+In a B2B SaaS platform, multiple enterprise customers share the same server infrastructure. The system uses API Key Role-Based Access Control (RBAC) and row-level tenant filtering to guarantee strict data privacy so one enterprise can never access another client's vehicle inspection records.
+
+#### 🛠️ Multi-Tenant Architecture
+1. **Row-Level Security (RLS):** Every database row in `inspections.db` includes a mandatory `tenant_id` foreign key.
+2. **Tenant-Scoped API Keys:** API key headers map to tenant contexts (`tenant_id = "hertz_us"` vs `tenant_id = "avis_eu"`).
+3. **Custom Business Catalogs:** Loads tenant-specific labor catalogs (`parts_catalog_hertz.json` vs `parts_catalog_avis.json`) for custom repair pricing.
+
+---
+
+### Q35: How do you handle Model Versioning and Zero-Downtime Blue/Green Deployments when updating AI models?
+
+#### 📌 In Simple Words
+When updating from YOLOv8 to YOLOv9, live API requests must not fail. We run Blue/Green server deployments behind an API gateway, routing a small percentage of traffic (Canary deployment) to the new model to verify accuracy before switching 100% of production traffic.
+
+#### 🛠️ Blue/Green Deployment Strategy
+1. **Container Versioning:** Tag Docker images with explicit commit SHAs (`overbody-api:v1.2.0-d0f40aa`).
+2. **Canary Traffic Split:** NGINX ingress controller routes 10% of traffic to the **Green Pod** (YOLOv9) while 90% stays on the **Blue Pod** (YOLOv8).
+3. **Automated Rollback:** Promethean alert triggers automatic rollback to Blue if HTTP 5xx error rates exceed 0.5% or p99 latency rises above 500ms.
+
+---
+
 ## 💡 Key Technical Cheat-Sheet
 
 | Topic | Technical Implementation |
@@ -638,4 +734,7 @@ Instead of printing plain text logs, the server appends formatted JSON lines to 
 | **360° Multi-Angle Engine**| Multi-photo aggregation, Coverage Index %, Vehicle Health Score (0-100) |
 | **Async Task Queue** | HTTP `202 Accepted` job ticketing (`/api/v1/analyze-async`) |
 | **Structured Observability**| JSON Lines audit logging (`logs/api_access.jsonl`) |
+| **Anti-Fraud Vector Search**| Deep feature embeddings + FAISS cosine similarity search |
+| **High-Speed Ingest** | Keyframe Laplacian blur filtering + TensorRT GPU inference |
+| **Edge Deployment** | INT8 Model Quantization + ONNX Runtime + PWA IndexedDB queue |
 | **Frontend Slider** | GPU-accelerated CSS `clip-path` and custom variable `--split-x` |
