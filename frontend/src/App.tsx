@@ -393,6 +393,24 @@ export default function App() {
 					? "mild"
 					: "good";
 
+	const [activeTab, setActiveTab] = useState<"single" | "multi360" | "audit">("single");
+	const [auditStats, setAuditStats] = useState<any>(null);
+	const [auditInspections, setAuditInspections] = useState<any[]>([]);
+
+	const fetchAuditData = async () => {
+		try {
+			const sRes = await fetch(`${API_BASE}/api/v1/stats`, { headers: { "X-API-Key": API_KEY } });
+			const sData = await sRes.json();
+			if (sData.success) setAuditStats(sData.stats);
+
+			const iRes = await fetch(`${API_BASE}/api/v1/inspections`, { headers: { "X-API-Key": API_KEY } });
+			const iData = await iRes.json();
+			if (iData.success) setAuditInspections(iData.inspections);
+		} catch (e) {
+			console.error("Failed to fetch audit data:", e);
+		}
+	};
+
 	// ─── Render ─────────────────────────────────────────────────────────────────
 	return (
 		<div className="app-shell">
@@ -411,9 +429,34 @@ export default function App() {
 					</div>
 					<div>
 						<div className="navbar-title">Overbody Damage Detector</div>
-						<div className="navbar-subtitle">AI Severity Advisor</div>
+						<div className="navbar-subtitle">AI Severity Advisor & Audit Platform</div>
 					</div>
 				</div>
+
+				<div style={{ display: "flex", gap: "8px", background: "rgba(255,255,255,0.05)", padding: "4px", borderRadius: "8px" }}>
+					<button
+						className={`btn btn-sm ${activeTab === "single" ? "btn-secondary" : "btn-ghost"}`}
+						onClick={() => setActiveTab("single")}
+					>
+						Single Panel
+					</button>
+					<button
+						className={`btn btn-sm ${activeTab === "multi360" ? "btn-secondary" : "btn-ghost"}`}
+						onClick={() => setActiveTab("multi360")}
+					>
+						360° Multi-Angle
+					</button>
+					<button
+						className={`btn btn-sm ${activeTab === "audit" ? "btn-secondary" : "btn-ghost"}`}
+						onClick={() => {
+							setActiveTab("audit");
+							fetchAuditData();
+						}}
+					>
+						Audit Database
+					</button>
+				</div>
+
 				<div className="navbar-actions">
 					<button className="btn btn-ghost" onClick={loadSample}>
 						Demo Sample

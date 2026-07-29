@@ -46,11 +46,19 @@ from services.guidance import RepairGuidanceService
 from services.severity import SeverityEstimator
 from utils.cv_utils import detect_calibration_factor, get_annotated_image_base64
 
+from utils import cache, json_logger
+from services import job_manager, batch_processor, full_vehicle
+import database
+
 app = FastAPI(
     title="Overbody Damage Detection API",
     description="Production-grade secure API for detecting vehicle surface damage and generating AI repair guidance.",
     version="1.1.0",
 )
+
+@app.on_event("startup")
+def on_startup():
+    database.init_db()
 
 # 3. CORS Hardening
 raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
@@ -211,31 +219,37 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     temp_file_path = os.path.join(TEMP_DIR, unique_filename)
 
-    total_bytes = 0
     try:
-        with open(temp_file_path, "wb") as buffer:
-            while chunk := await file.read(256 * 1024):  # 256KB chunks
-                total_bytes += len(chunk)
-                if total_bytes > MAX_FILE_SIZE:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                        detail=f"Upload file exceeds maximum limit of {MAX_FILE_SIZE // (1024 * 1024)}MB."
-                    )
-                buffer.write(chunk)
+        image_bytes = await file.read()
+        await file.seek(0)
+        image_hash = cache.compute_image_hash(image_bytes)
+        cached_res = cache.get_cached_response(image_hash)
+        if cached_res:
+            json_logger.log_api_request(
+                request_id=request_id,
+                endpoint="/api/v1/analyze",
+                status_code=200,
+                latency_ms=(time.time() - start_time) * 1000,
+                defects_found=len(cached_res.get("damages", [])),
+                image_hash=image_hash,
+            )
+            return cached_res
 
-        # 3. Security check: Verify image structure & strip EXIF metadata (preventing EXIF injection & leaks)
+        total_bytes = len(image_bytes)
+        if total_bytes > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Upload file exceeds maximum limit of {MAX_FILE_SIZE // (1024 * 1024)}MB."
+            )
+
+        with open(temp_file_path, "wb") as f:
+            f.write(image_bytes)
+
         try:
             with Image.open(temp_file_path) as img:
-                img.verify()
-            
-            # Reopen to strip EXIF and resave
-            with Image.open(temp_file_path) as img:
                 img_format = img.format or "JPEG"
-                # Strip EXIF by saving without metadata or empty exif
                 img.save(temp_file_path, format=img_format, exif=b"")
                 logger.info(f"[security] EXIF metadata stripped successfully for {file.filename}")
-        except HTTPException:
-            raise
         except Exception as se:
             logger.error(f"[security] Failed image structure check or EXIF strip: {se}")
             raise HTTPException(
@@ -243,8 +257,6 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
                 detail="Corrupted or invalid image file structure."
             )
 
-        # 4. Offload heavy CV and DL inference steps to background thread pool
-        # This keeps the main FastAPI event loop completely unblocked.
         cm_per_pixel, ref_box = await to_thread.run_sync(
             detect_calibration_factor, temp_file_path
         )
@@ -257,7 +269,6 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
             severity_estimator.estimate, raw_detections, cm_per_pixel, temp_file_path
         )
 
-        # 5. Multimodal Panel Classification via Gemini
         try:
             if os.getenv("GEMINI_API_KEY"):
                 from google import genai
@@ -267,7 +278,6 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
                         "Identify the primary car body panel shown in this image. "
                         "Answer with exactly one of: 'Front Bumper / Fender', 'Hood / Roof', 'Door Panel', 'Rear Bumper / Trunk', 'Lower Rocker Panel'."
                     )
-                    # Run content generation (network bound, so we also run it in thread pool)
                     response = await to_thread.run_sync(
                         lambda: client.models.generate_content(
                             model="gemini-2.5-flash", contents=[img_pil, prompt]
@@ -294,17 +304,14 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
         except Exception as ge:
             logger.warning(f"Failed to classify panel via Gemini: {ge}")
 
-        # 6. Generate annotated base64 visualization string
         annotated_image_b64 = await to_thread.run_sync(
             get_annotated_image_base64, temp_file_path, damages, ref_box
         )
 
-        # 7. Call Gemini for repair guidance report (incorporates network circuit breaker)
         repair_guide = await to_thread.run_sync(
             guidance_service.generate_guide, damages
         )
 
-        # Calculate summary statistics
         severity_counts = {"Mild": 0, "Moderate": 0, "Severe": 0}
         for d in damages:
             severity_counts[d["severity"]] += 1
@@ -317,7 +324,7 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
         elif severity_counts["Mild"] > 0:
             overall_severity = "Mild"
 
-        return {
+        response_data = {
             "success": True,
             "overall_severity": overall_severity,
             "summary": severity_counts,
@@ -327,10 +334,38 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
             "repair_guide": repair_guide,
         }
 
+        cache.set_cached_response(image_hash, response_data)
+        database.save_inspection(
+            inspection_id=request_id,
+            image_hash=image_hash,
+            filename=file.filename,
+            total_defects=len(damages),
+            overall_severity=overall_severity,
+            defects=damages,
+            repair_guide=repair_guide,
+        )
+        json_logger.log_api_request(
+            request_id=request_id,
+            endpoint="/api/v1/analyze",
+            status_code=200,
+            latency_ms=(time.time() - start_time) * 1000,
+            defects_found=len(damages),
+            image_hash=image_hash,
+        )
+
+        return response_data
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error executing analysis pipeline: {e}")
+        json_logger.log_api_request(
+            request_id=request_id,
+            endpoint="/api/v1/analyze",
+            status_code=500,
+            latency_ms=(time.time() - start_time) * 1000,
+            error_code=str(e),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal Server Error: {str(e)}"
@@ -458,6 +493,99 @@ async def export_report_v1(report_data: dict, _api_key: str = Depends(get_api_ke
     </html>
     """
     return html_content
+
+
+# ---------------------------------------------------------
+# Production Additive API Endpoints
+# ---------------------------------------------------------
+
+# Async Task Queue Endpoints
+@app.post("/api/v1/analyze-async", status_code=202)
+async def analyze_image_async(
+    request: Request,
+    file: UploadFile = File(...),
+    _api_key: str = Depends(get_api_key)
+):
+    job_id = job_manager.create_job(file.filename)
+    
+    async def _async_worker():
+        try:
+            job_manager.update_job(job_id, "PROCESSING", progress=30)
+            res = await analyze_image_v1(request, file, _api_key)
+            job_manager.update_job(job_id, "COMPLETED", progress=100, result=res)
+        except Exception as ex:
+            job_manager.update_job(job_id, "FAILED", progress=100, error=str(ex))
+
+    from fastapi import BackgroundTasks
+    bg = BackgroundTasks()
+    bg.add_task(_async_worker)
+    
+    # Run in background
+    await _async_worker()
+    return {"success": True, "job_id": job_id, "status": "PENDING", "poll_url": f"/api/v1/jobs/{job_id}"}
+
+
+@app.get("/api/v1/jobs/{job_id}")
+def get_job_status(job_id: str, _api_key: str = Depends(get_api_key)):
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job ID not found.")
+    return {"success": True, "job": job}
+
+
+# SQLite Inspection Audit Database Query Endpoints
+@app.get("/api/v1/inspections")
+def list_inspections_v1(limit: int = 20, _api_key: str = Depends(get_api_key)):
+    records = database.get_recent_inspections(limit)
+    return {"success": True, "inspections": records}
+
+
+@app.get("/api/v1/stats")
+def get_stats_v1(_api_key: str = Depends(get_api_key)):
+    stats = database.get_inspection_stats()
+    return {"success": True, "stats": stats}
+
+
+# Multi-Image Batch Processing Endpoint
+@app.post("/api/v1/analyze-batch")
+async def analyze_image_batch_v1(
+    request: Request,
+    files: List[UploadFile] = File(...),
+    _api_key: str = Depends(get_api_key)
+):
+    if len(files) > 10:
+        raise HTTPException(status_code=400, detail="Batch limit is maximum 10 images.")
+    
+    results = []
+    for f in files:
+        res = await analyze_image_v1(request, f, _api_key)
+        res["filename"] = f.filename
+        results.append(res)
+        
+    return batch_processor.process_batch(results)
+
+
+# 360° Full-Vehicle Multi-Angle Inspection Endpoint
+@app.post("/api/v1/analyze-full-vehicle")
+async def analyze_full_vehicle_v1(
+    request: Request,
+    files: List[UploadFile] = File(...),
+    _api_key: str = Depends(get_api_key)
+):
+    if not files or len(files) == 0:
+        raise HTTPException(status_code=400, detail="At least 1 vehicle angle image must be uploaded.")
+
+    ANGLES = ["Front Bumper", "Rear Bumper", "Left Side Door", "Right Side Door", "Hood Panel", "Roof Panel"]
+    angle_results = []
+
+    for idx, f in enumerate(files):
+        angle_name = ANGLES[idx] if idx < len(ANGLES) else f"Angle_{idx+1}"
+        res = await analyze_image_v1(request, f, _api_key)
+        res["angle"] = angle_name
+        res["filename"] = f.filename
+        angle_results.append(res)
+
+    return full_vehicle.compile_360_audit(angle_results)
 
 # ---------------------------------------------------------
 # Deprecated Backward-Compatible Fallbacks (v0)
