@@ -251,7 +251,7 @@ To convert pixel measurements to centimeters, the system locates a standard cred
    - Finds contours with `cv2.findContours()` and simplifies them to 4 corners using `cv2.approxPolyDP()`.
    - Extracts bounding box pixel width ($w_{\text{px}}$) and height ($h_{\text{px}}$).
 3. **Scale Factor Calculation:**
-   $$\text{pixels\_per\_cm} = \frac{\max(w_{\text{px}}, h_{\text{px}})}{8.56 \text{ cm}}$$
+   $$\text{pixels\_per\_cm} = \frac{\max(w_{\text{px}}, h_{\text{px}})}{8.56\text{ cm}}$$
    $$\text{cm\_per\_pixel} = \frac{1.0}{\text{pixels\_per\_cm}}$$
 4. **Measuring Flaws:** To find the physical length of a scratch with pixel length $L_{\text{px}}$:
    $$\text{Length}_{\text{cm}} = L_{\text{px}} \times \text{cm\_per\_pixel}$$
@@ -572,7 +572,7 @@ The 360° Multi-Angle engine accepts 1 to 6 vehicle photo angles (Front, Rear, L
 
 #### 🛠️ Technical Scoring Formula (`services/full_vehicle.py`)
 1. **Audit Coverage Index:**
-   $$\text{Coverage Index \%} = \left(\frac{\text{Required Angles Covered}}{4}\right) \times 100$$
+   $$\text{Coverage Index Percentage} = \left(\frac{\text{Required Angles Covered}}{4}\right) \times 100$$
 2. **Severity Deductions:**
    - **Mild Defect:** -5 points
    - **Moderate Defect:** -12 points
