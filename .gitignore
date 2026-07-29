@@ -20,3 +20,7 @@ frontend/.env
 .idea/
 .DS_Store
 Thumbs.db
+
+# Runtime SQLite DB and log files
+backend/inspections.db
+backend/logs/

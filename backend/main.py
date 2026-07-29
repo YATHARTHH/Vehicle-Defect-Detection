@@ -219,6 +219,9 @@ async def analyze_image_v1(file: UploadFile = File(...), _api_key: str = Depends
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     temp_file_path = os.path.join(TEMP_DIR, unique_filename)
 
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
+
     try:
         image_bytes = await file.read()
         await file.seek(0)
