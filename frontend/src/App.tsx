@@ -397,6 +397,10 @@ export default function App() {
 	const [auditStats, setAuditStats] = useState<any>(null);
 	const [auditInspections, setAuditInspections] = useState<any[]>([]);
 
+	const [multiFiles, setMultiFiles] = useState<File[]>([]);
+	const [multiLoading, setMultiLoading] = useState(false);
+	const [multiResult, setMultiResult] = useState<any>(null);
+
 	const fetchAuditData = async () => {
 		try {
 			const sRes = await fetch(`${API_BASE}/api/v1/stats`, { headers: { "X-API-Key": API_KEY } });
@@ -408,6 +412,34 @@ export default function App() {
 			if (iData.success) setAuditInspections(iData.inspections);
 		} catch (e) {
 			console.error("Failed to fetch audit data:", e);
+		}
+	};
+
+	const run360Audit = async () => {
+		if (multiFiles.length === 0) return;
+		setMultiLoading(true);
+		setMultiResult(null);
+
+		try {
+			const formData = new FormData();
+			multiFiles.forEach((file) => formData.append("files", file));
+
+			const res = await fetch(`${API_BASE}/api/v1/analyze-full-vehicle`, {
+				method: "POST",
+				headers: { "X-API-Key": API_KEY },
+				body: formData,
+			});
+
+			const data = await res.json();
+			if (data.success) {
+				setMultiResult(data);
+			} else {
+				alert(data.detail || "Multi-angle analysis failed.");
+			}
+		} catch (err: any) {
+			alert(`Analysis error: ${err.message}`);
+		} finally {
+			setMultiLoading(false);
 		}
 	};
 
@@ -471,8 +503,139 @@ export default function App() {
 
 			{/* ── Main ── */}
 			<main className="main-content">
-				{/* ─── LANDING ─── */}
-				{!preview && !loading && (
+				{/* ─── 360 MULTI-ANGLE TAB ─── */}
+				{activeTab === "multi360" && (
+					<div className="landing-container fade-up" style={{ maxWidth: "1000px" }}>
+						<div className="landing-badge">
+							<span className="landing-badge-dot" />
+							360° Multi-Angle Vehicle Inspection Engine
+						</div>
+						<h1 className="landing-h1">
+							Full Vehicle <span>360° Audit</span>
+						</h1>
+						<p className="landing-subtitle">
+							Upload 1 to 6 vehicle angle photos (Front, Rear, Left, Right, Hood, Roof). The AI pipeline aggregates all defects into a unified Vehicle Health Score (0–100) and Grade.
+						</p>
+
+						<div className="card" style={{ padding: "24px", marginBottom: "24px" }}>
+							<input
+								type="file"
+								multiple
+								accept="image/png,image/jpeg,image/webp"
+								onChange={(e) => {
+									if (e.target.files) {
+										setMultiFiles(Array.from(e.target.files));
+									}
+								}}
+								style={{ marginBottom: "16px" }}
+							/>
+							{multiFiles.length > 0 && (
+								<p style={{ color: "#a1a1aa", fontSize: "14px", marginBottom: "16px" }}>
+									{multiFiles.length} photo(s) selected: {multiFiles.map((f) => f.name).join(", ")}
+								</p>
+							)}
+							<button
+								className="btn btn-primary"
+								onClick={run360Audit}
+								disabled={multiLoading || multiFiles.length === 0}
+							>
+								{multiLoading ? "Running 360° Analysis…" : `Run 360° Audit (${multiFiles.length} Photos)`}
+							</button>
+						</div>
+
+						{multiResult && (
+							<div className="card fade-up" style={{ padding: "24px" }}>
+								<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+									<div>
+										<h2 style={{ fontSize: "24px", fontWeight: 700, color: "#f4f4f5" }}>
+											Vehicle Health Score: {multiResult.full_vehicle_summary.vehicle_health_score}/100
+										</h2>
+										<p style={{ color: "#38bdf8", fontWeight: 600 }}>
+											{multiResult.full_vehicle_summary.vehicle_health_grade} • Audit Coverage: {multiResult.full_vehicle_summary.coverage_completeness_index}
+										</p>
+									</div>
+									<div className="badge badge-mild">
+										{multiResult.full_vehicle_summary.total_defects_detected} Defects Found Across {multiResult.full_vehicle_summary.total_angles_inspected} Angles
+									</div>
+								</div>
+
+								<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
+									{multiResult.angle_breakdown.map((item: any, idx: number) => (
+										<div key={idx} style={{ background: "rgba(255,255,255,0.03)", padding: "16px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.08)" }}>
+											<h3 style={{ color: "#f4f4f5", fontSize: "16px", fontWeight: 600, marginBottom: "8px" }}>
+												{item.angle} ({item.filename})
+											</h3>
+											<p style={{ color: "#a1a1aa", fontSize: "14px" }}>
+												Defects: <strong>{item.defects_count}</strong> • Severity: <strong>{item.overall_severity}</strong>
+											</p>
+										</div>
+									))}
+								</div>
+							</div>
+						)}
+					</div>
+				)}
+
+				{/* ─── AUDIT DATABASE TAB ─── */}
+				{activeTab === "audit" && (
+					<div className="landing-container fade-up" style={{ maxWidth: "1000px" }}>
+						<div className="landing-badge">
+							<span className="landing-badge-dot" />
+							SQLite Audit Database & System Telemetry
+						</div>
+						<h1 className="landing-h1">
+							Inspection <span>Audit Platform</span>
+						</h1>
+
+						{auditStats && (
+							<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px", marginBottom: "32px" }}>
+								<div className="card" style={{ padding: "20px" }}>
+									<div style={{ color: "#a1a1aa", fontSize: "13px" }}>Total Inspections</div>
+									<div style={{ fontSize: "28px", fontWeight: 700, color: "#38bdf8" }}>{auditStats.total_inspections}</div>
+								</div>
+								<div className="card" style={{ padding: "20px" }}>
+									<div style={{ color: "#a1a1aa", fontSize: "13px" }}>Total Defects Found</div>
+									<div style={{ fontSize: "28px", fontWeight: 700, color: "#f43f5e" }}>{auditStats.total_defects_found}</div>
+								</div>
+								<div className="card" style={{ padding: "20px" }}>
+									<div style={{ color: "#a1a1aa", fontSize: "13px" }}>Avg Defects / Vehicle</div>
+									<div style={{ fontSize: "28px", fontWeight: 700, color: "#fbbf24" }}>{auditStats.average_defects_per_vehicle}</div>
+								</div>
+							</div>
+						)}
+
+						<div className="card" style={{ padding: "24px" }}>
+							<h3 style={{ fontSize: "18px", fontWeight: 600, color: "#f4f4f5", marginBottom: "16px" }}>Recent Inspection Audit Records</h3>
+							<table style={{ width: "100%", borderCollapse: "collapse", color: "#e4e4e7", fontSize: "14px" }}>
+								<thead>
+									<tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", textTransform: "uppercase", fontSize: "12px", color: "#a1a1aa" }}>
+										<th style={{ padding: "12px", textAlign: "left" }}>Inspection ID</th>
+										<th style={{ padding: "12px", textAlign: "left" }}>Timestamp</th>
+										<th style={{ padding: "12px", textAlign: "left" }}>Filename</th>
+										<th style={{ padding: "12px", textAlign: "left" }}>Defects</th>
+										<th style={{ padding: "12px", textAlign: "left" }}>Severity</th>
+									</tr>
+								</thead>
+								<tbody>
+									{auditInspections.map((row: any, idx: number) => (
+										<tr key={idx} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+											<td style={{ padding: "12px", fontFamily: "monospace" }}>{row.id.substring(0, 8)}</td>
+											<td style={{ padding: "12px" }}>{new Date(row.timestamp).toLocaleString()}</td>
+											<td style={{ padding: "12px" }}>{row.filename}</td>
+											<td style={{ padding: "12px", fontWeight: 600 }}>{row.total_defects}</td>
+											<td style={{ padding: "12px" }}>
+												<span className={`badge badge-${row.overall_severity.toLowerCase()}`}>{row.overall_severity}</span>
+											</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				)}
+
+				{/* ─── SINGLE PANEL LANDING ─── */}
+				{activeTab === "single" && !preview && !loading && (
 					<div className="landing-container fade-up">
 						<div className="landing-badge">
 							<span className="landing-badge-dot" />
