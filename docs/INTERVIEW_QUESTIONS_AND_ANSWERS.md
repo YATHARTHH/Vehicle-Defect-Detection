@@ -541,6 +541,87 @@ To comply with privacy laws, the system automatically blurs license plates and f
 
 ---
 
+### Q24: How does your SHA-256 deduplication and in-memory response caching work?
+
+#### 📌 In Simple Words
+When an image is uploaded, the backend calculates its unique cryptographic fingerprint (SHA-256 hash). If the exact same image is uploaded again, the system skips re-running AI model inference and returns the cached JSON analysis response instantly in under 10 milliseconds.
+
+#### 🛠️ Technical Cache Pipeline (`utils/cache.py`)
+1. **Cryptographic Fingerprinting:** `hashlib.sha256(image_bytes).hexdigest()` creates a 64-character unique hash of the raw image bytes.
+2. **Sub-10ms Lookup:** The server checks an in-memory LRU cache dictionary (`_memory_cache`). If a match is found, it injects `"cache_hit": true` and returns the JSON payload immediately.
+3. **GPU Cost Savings:** Bypasses YOLOv8 and MiDaS inference execution, reducing server CPU/GPU load by up to 90% on duplicate uploads.
+
+---
+
+### Q25: How does your SQLite inspection audit database and analytics engine work?
+
+#### 📌 In Simple Words
+Every completed inspection automatically saves its audit details (unique ID, image hash, timestamp, defect counts, severity rating, and panel classification) to a local SQLite database file (`inspections.db`). This allows fleet managers to view recent inspection logs and system-wide damage analytics.
+
+#### 🛠️ Technical Audit Database Pipeline (`database.py`)
+1. **Automated Schema Initialization:** On server startup, `init_db()` ensures the `inspections` table exists.
+2. **Audit Persistence:** `save_inspection()` records completed audits with timestamps (`ISO 8601 UTC`).
+3. **Analytics Aggregation:** `GET /api/v1/stats` computes real-time business metrics (`total_inspections`, `total_defects_found`, `average_defects_per_vehicle`, and severity breakdowns).
+
+---
+
+### Q26: How does the 360° Multi-Angle Vehicle Audit Engine compute the Vehicle Health Score?
+
+#### 📌 In Simple Words
+The 360° Multi-Angle engine accepts 1 to 6 vehicle photo angles (Front, Rear, Left, Right, Hood, Roof). It aggregates all detected flaws across all angles, measures audit coverage, deducts weighted severity penalties from a starting score of 100, and assigns an overall Vehicle Health Grade (Grade A to F).
+
+#### 🛠️ Technical Scoring Formula (`services/full_vehicle.py`)
+1. **Audit Coverage Index:**
+   $$\text{Coverage Index \%} = \left(\frac{\text{Required Angles Covered}}{4}\right) \times 100$$
+2. **Severity Deductions:**
+   - **Mild Defect:** -5 points
+   - **Moderate Defect:** -12 points
+   - **Severe Defect:** -25 points
+3. **Vehicle Health Grade:**
+   - **90 – 100:** Grade A (Excellent)
+   - **75 – 89:** Grade B (Minor Wear)
+   - **60 – 74:** Grade C (Moderate Damage)
+   - **40 – 59:** Grade D (Major Repair Required)
+   - **0 – 39:** Grade F (Severe Body Collision)
+
+---
+
+### Q27: How does your asynchronous task queue (`/api/v1/analyze-async`) prevent HTTP request timeouts?
+
+#### 📌 In Simple Words
+On slow networks or when processing high-resolution images, synchronous HTTP requests can time out. The async endpoint immediately accepts the upload, assigns a unique `job_id`, returns HTTP `202 Accepted`, and processes the AI pipeline in a background task while the client polls for status updates.
+
+#### 🛠️ Asynchronous Workflow (`services/job_manager.py`)
+1. **Instant Response (`202 Accepted`):** `POST /api/v1/analyze-async` returns a job ticket (`job_id`) within 50ms.
+2. **Background Execution:** FastAPI `BackgroundTasks` executes the CV/DL model pipeline asynchronously.
+3. **Polling Endpoint:** Clients query `GET /api/v1/jobs/{job_id}` to check status (`PENDING` $\rightarrow$ `PROCESSING` $\rightarrow$ `COMPLETED`).
+
+---
+
+### Q28: How does multi-image batch processing (`/api/v1/analyze-batch`) work?
+
+#### 📌 In Simple Words
+Instead of uploading images one by one, fleet operators can send up to 10 vehicle images in a single API call. The backend processes the images and returns an itemized fleet summary report with overall fleet condition ratings.
+
+#### 🛠️ Batch Processing Pipeline (`services/batch_processor.py`)
+1. **Batch Validation:** Enforces a maximum limit of 10 files per request.
+2. **Aggregated Summary:** Aggregates total defects, severity counts, and itemized findings for every vehicle in the batch.
+
+---
+
+### Q29: How is structured JSON logging (`logs/api_access.jsonl`) implemented for observability?
+
+#### 📌 In Simple Words
+Instead of printing plain text logs, the server appends formatted JSON lines to `logs/api_access.jsonl`. Each entry records the exact timestamp, request ID, endpoint, latency, status code, and defect count for easy integration with enterprise log monitoring tools like ELK Stack or Datadog.
+
+#### 🛠️ Structured Observability Pipeline (`utils/json_logger.py`)
+- **JSON Lines Format:**
+  ```json
+  {"timestamp": "2026-07-30T01:15:00Z", "request_id": "9b1e4a2c", "endpoint": "/api/v1/analyze", "status_code": 200, "latency_ms": 185.4, "defects_found": 2, "image_hash": "a5f8..."}
+  ```
+
+---
+
 ## 💡 Key Technical Cheat-Sheet
 
 | Topic | Technical Implementation |
@@ -552,4 +633,9 @@ To comply with privacy laws, the system automatically blurs license plates and f
 | **Scale Calibration** | ISO/IEC 7810 Credit Card reference ($8.56\text{ cm} \times 5.398\text{ cm}$) |
 | **API Resilience** | 3-State Circuit Breaker (`CLOSED`, `TRIPPED`, `HALF-OPEN`) |
 | **Security Controls** | `secrets.compare_digest` constant-time check, EXIF stripping, 10MB chunking |
+| **Response Caching** | SHA-256 image hashing with sub-10ms LRU cache lookup |
+| **Audit Persistence** | Local SQLite inspection audit database (`inspections.db`) |
+| **360° Multi-Angle Engine**| Multi-photo aggregation, Coverage Index %, Vehicle Health Score (0-100) |
+| **Async Task Queue** | HTTP `202 Accepted` job ticketing (`/api/v1/analyze-async`) |
+| **Structured Observability**| JSON Lines audit logging (`logs/api_access.jsonl`) |
 | **Frontend Slider** | GPU-accelerated CSS `clip-path` and custom variable `--split-x` |
